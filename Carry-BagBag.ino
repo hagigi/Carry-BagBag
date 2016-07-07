@@ -17,7 +17,6 @@ enum
   ,enOdekake      // お出かけ
   ,enOwakare      // お別れ
   ,enOmukae       // おむかえ
-  ,enOtikazuki    // 接近(停止)
   ,enEttaiiiiiii  // いたぃぃ
   ,enMatteeeeeee  // 待ってぇ
   ,enOhanashi     // お話
@@ -49,13 +48,15 @@ long previousMillis = 0;  // last time the heart rate was checked, in ms
 // 通知
 int previousNotify = enNotifyNone;
 int currentNotify = enNotifyNone;
+int flagOwakare = 0;
+int flagOhanashi = 0;
 
 // Switch
 int handleSwitchPin = 7;
 int pushSwitchPin = 8;
 
 // 閾値
-float ThresholdWalkSlow = 2.0f;
+float ThresholdWalkSlow = 1.5f;
 float ThresholdWalkMid = 1.0f;
 
 void setup()
@@ -140,9 +141,9 @@ void loop()
     // while the central is still connected to peripheral:
     while (central.connected())
     {
-      // 200ms phase check:
+      // 1000ms phase check:
       long currentMillis = millis();
-      if (currentMillis - previousMillis >= 200)
+      if (currentMillis - previousMillis >= 1000)
       {
         previousMillis = currentMillis;
 
@@ -157,11 +158,20 @@ void loop()
           else if (checkHandleSwitch() == enHandleSwitchON && checkPushSwitch() == enPushSwitchOFF)
           {
             currentNotify = enOwakare;// お別れ
+            flagOwakare = 1;
           }
           else if (checkHandleSwitch() == enHandleSwitchOFF && checkPushSwitch() == enPushSwitchOFF)
           {
-            currentNotify = enEttaiiiiiii;// いたぃぃ
-            Serial.println("いたぃぃ");
+            int16_t ax, ay, az;         // raw gyro values
+            float gx, gy, gz;
+
+            // these methods (and a few others) are also available
+            CurieImu.getAcceleration(&ax, &ay, &az);
+            gz = convertRawAcceleration(az);
+            if (gz >= 1.0)
+            {
+              currentNotify = enEttaiiiiiii;// いたぃぃ
+            }
           }
           else if (checkHandleSwitch() == enHandleSwitchOFF && checkPushSwitch() == enPushSwitchON)
           {
@@ -179,38 +189,74 @@ void loop()
           else if (checkHandleSwitch() == enHandleSwitchON && checkPushSwitch() == enPushSwitchOFF)
           {
             currentNotify = enOmatase;// おまたせ
-            Serial.println("おまたせ");
           }
           else if (checkHandleSwitch() == enHandleSwitchOFF && checkPushSwitch() == enPushSwitchOFF)
           {
-            if (currentNotify == enOwakare)
+            if (flagOwakare != 0)
             {
+              flagOwakare = 0;
               currentNotify = enOmukae;// おむかえ
-              Serial.println("おむかえ");              
+              //Serial.println("おむかえ");              
             }
             else
             {
-              currentNotify = enOwakare;// おでかけ
-              Serial.println("おでかけ");              
+              if (currentNotify != enOhanashi && currentNotify != enMatteeeeeee)
+              {
+                currentNotify = enOdekake;// おでかけ
+                //Serial.println("おでかけ");               
+              }
+              else
+              {
+                flagOhanashi = 1;
+              }
             }
           }
           else if (checkHandleSwitch() == enHandleSwitchOFF && checkPushSwitch() == enPushSwitchON)
           {
-            currentNotify = enOhanashi;// おはなし
-            Serial.println("おはなし");
+            if (currentNotify != enOhanashi || flagOhanashi != 0)
+            {
+              currentNotify = enOhanashi;// おはなし
+              previousNotify = enOdekake;
+              flagOhanashi = 0;
+            }
           }
           
           // Speed
           float speed = getSpeed();
-          if(speed > ThresholdWalkSlow)
+          if(speed >= ThresholdWalkMid)
           {
             currentNotify = enMatteeeeeee;// 待ってぇ
-            Serial.println(" 待ってぇ");
           }
         }
         
         if (currentNotify != previousNotify)
         {
+
+          switch(currentNotify)
+          {
+            case enOmatase:      // おまたせ
+              Serial.println("おまたせ");
+              break;
+            case enOdekake:      // お出かけ
+              Serial.println("おでかけ");
+              break;              
+            case enOwakare:      // お別れ
+              Serial.println("お別れ");
+              break;
+            case enOmukae:       // おむかえ
+              Serial.println("おむかえ");
+              break;
+            case enEttaiiiiiii:  // いたぃぃ
+              Serial.println("いたぃぃ");
+              break;
+            case enMatteeeeeee:  // 待ってぇ
+              Serial.println(" 待ってぇ");
+              break;
+            case enOhanashi:     // お話
+              Serial.println("おはなし");
+              break;
+          };
+          
           const unsigned char notifyCharArray[2] = { 0, (unsigned char)currentNotify };
           CarryBagBagCharacteristic.setValue(notifyCharArray, 2);
           previousNotify = currentNotify;
@@ -221,17 +267,18 @@ void loop()
   }
 #else
   long currentMillis = millis();
-  // if 200ms have passed, check the heart rate measurement:
-  if (currentMillis - previousMillis >= 200)
+  // if 1000ms have passed, check the heart rate measurement:
+  if (currentMillis - previousMillis >= 1000)
   {
     previousMillis = currentMillis;
+    #if 1 // 加速度情報
     float xyz = getXYZ();
     if (f==0)
     {
       dxyz += xyz - oxyz;
     }
     f = 0;
-    velocity = dxyz * 9.8f;
+    velocity = abs(dxyz * 9.8f);
     oxyz = xyz;
     Serial.print("m/s:\t");
     Serial.println(velocity);
@@ -244,6 +291,12 @@ void loop()
     {
       Serial.println("switch off");
     }
+    #else
+    Serial.println(currentNotify);
+    const unsigned char notifyCharArray[2] = { 0, (unsigned char)currentNotify };
+    CarryBagBagCharacteristic.setValue(notifyCharArray, 2);
+    currentNotify = (currentNotify + 1) % 8;
+    #endif
   }
 #endif
 }
@@ -256,7 +309,7 @@ float getSpeed()
     dxyz += xyz - oxyz;
   }
   f = 0;
-  velocity = dxyz * 9.8;// 単位(m/s)
+  velocity = abs(dxyz * 9.8);// 単位(m/s)
   oxyz = xyz;
 
   return velocity;
@@ -274,16 +327,18 @@ int getPosition()
   gy = convertRawAcceleration(ay);
   gz = convertRawAcceleration(az);
 
-  if (gz >= 1.0)
-  {
-    // きゃりーばぐばぐが倒れている
-    ret = enCarryFall;
-  }
-  else
+  //Serial.println(gz);
+  if (gz <= 0.5)
   {
     // きゃりーばぐばぐが立っている
     ret = enCarryStand;
   }
+  else
+  {
+    // きゃりーばぐばぐが倒れている
+    ret = enCarryFall;
+  }
+
   return ret;  
 }
 
@@ -294,10 +349,12 @@ int checkHandleSwitch()
   if (digitalRead(handleSwitchPin))
   {
     ret = enHandleSwitchON;
+//    Serial.println("HandleSwitch on");    
   }
   else
   {
     ret = enHandleSwitchOFF;
+//    Serial.println("HandleSwitch off");    
   }
   
   return ret;
@@ -310,10 +367,12 @@ int checkPushSwitch()
   if (digitalRead(pushSwitchPin))
   {
     ret = enPushSwitchON;
+//    Serial.println("PushSwitch on");    
   }
   else
   {
     ret = enPushSwitchOFF;
+//    Serial.println("PushSwitch off");
   }
   
   return ret;
@@ -335,17 +394,19 @@ float getXYZ()
   gy = convertRawAcceleration(ay);
   gz = convertRawAcceleration(az);
   // display tab-separated accel/gyro x/y/z values
+/*  
   Serial.print("g:\t");
   Serial.print(gx);
   Serial.print("\t");
   Serial.print(gy);
   Serial.print("\t");
   Serial.print(gz);
-
+*/
   gxyz = sqrt(pow(gx, 2.0f) + pow(gy, 2.0f) + pow(gz, 2.0f));  
+/*
   Serial.print("\t");
   Serial.println(gxyz);
-    
+*/
   return gxyz;
 }
 
